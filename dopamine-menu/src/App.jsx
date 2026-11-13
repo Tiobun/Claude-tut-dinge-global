@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Shuffle, RotateCcw, X, Play, Clock, Check, Dices } from 'lucide-react'
+import { Shuffle, RotateCcw, X, Play, Clock, Check, Dices, Smartphone } from 'lucide-react'
 import { MENU, ITEM_BY_ID } from './menu.js'
+import {
+  parseIntercept, appLabel, clearHash, loadLog, appendLog, todayStats,
+  HoldButton, SetupSheet, PASS_MINUTES, buzz,
+} from './intercept.jsx'
 
 const SPIN_MS = 1100
 const STORAGE_KEY = 'dopamine-menu-v2'
@@ -38,6 +42,14 @@ function rollMenu(prev = {}, done = []) {
   return out
 }
 
+// prefer what's on today's menu; fall back to anything not done yet, then anything
+function interceptPool({ selection, done }) {
+  const visibleOpen = MENU.flatMap((c) => selection[c.id]).filter((id) => !done.includes(id))
+  if (visibleOpen.length) return visibleOpen
+  const anyOpen = Object.keys(ITEM_BY_ID).filter((id) => !done.includes(id))
+  return anyOpen.length ? anyOpen : Object.keys(ITEM_BY_ID)
+}
+
 function loadState() {
   try {
     const s = JSON.parse(localStorage.getItem(STORAGE_KEY))
@@ -61,7 +73,7 @@ function saveState(s) {
 
 /* ───────────────────────── Header ───────────────────────── */
 
-function Header({ onShuffle, doneCount }) {
+function Header({ onShuffle, doneCount, dodged }) {
   const [turn, setTurn] = useState(0)
   return (
     <header className="flex items-center gap-4 pt-8 pb-6">
@@ -77,7 +89,11 @@ function Header({ onShuffle, doneCount }) {
           Dopamine <span className="italic font-normal text-amber-glow">Menu</span>
         </h1>
         <p className="mt-2 h-4 text-xs text-cream/45" aria-live="polite">
-          {doneCount > 0 ? `${doneCount} done today` : 'Pick one. That’s it.'}
+          {doneCount > 0 || dodged > 0
+            ? [doneCount > 0 && `${doneCount} done`, dodged > 0 && `${dodged} scroll${dodged > 1 ? 's' : ''} dodged`]
+                .filter(Boolean)
+                .join(' · ') + ' today'
+            : 'Pick one. That’s it.'}
         </p>
       </div>
 
@@ -147,7 +163,7 @@ function DecideButton({ onClick, busy, disabled }) {
 
 /* ─────────────────────── Focus sheet ─────────────────────── */
 
-function FocusSheet({ item, spinning, isDone, onClose, onSpin, onDone, canSpin }) {
+function FocusSheet({ item, spinning, isDone, onClose, onLetsGo, onSpin, onDone, canSpin, intercept, pass, onScroll }) {
   const primaryRef = useRef(null)
 
   useEffect(() => {
@@ -164,8 +180,9 @@ function FocusSheet({ item, spinning, isDone, onClose, onSpin, onDone, canSpin }
     if (!spinning) primaryRef.current?.focus()
   }, [spinning])
 
-  const Icon = item.icon
+  const Icon = pass ? Smartphone : item.icon
   const cat = item.category
+  const eyebrow = spinning ? 'Shuffling…' : 'Your pick'
 
   return (
     <div
@@ -196,12 +213,13 @@ function FocusSheet({ item, spinning, isDone, onClose, onSpin, onDone, canSpin }
             </button>
 
             <p className="relative text-xs font-medium uppercase tracking-[0.25em] text-teal-mist/80">
-              {spinning ? 'Shuffling…' : 'Your pick'}
+              {pass ? 'Your call' : intercept ? `Instead of ${appLabel(intercept)}…` : eyebrow}
             </p>
 
             <div
-              key={spinning ? item.id : 'final'}
-              className={`relative mx-auto mt-5 flex h-24 w-24 items-center justify-center rounded-3xl ring-1 ${cat.accent}
+              key={pass ? 'pass' : spinning ? item.id : 'final'}
+              className={`relative mx-auto mt-5 flex h-24 w-24 items-center justify-center rounded-3xl ring-1
+                          ${pass ? 'bg-cream/5 text-cream/60 ring-chrome/20' : cat.accent}
                           ${spinning ? 'scale-95 opacity-80' : 'animate-rise'}`}
             >
               <Icon className="h-11 w-11" strokeWidth={1.75} />
@@ -213,9 +231,25 @@ function FocusSheet({ item, spinning, isDone, onClose, onSpin, onDone, canSpin }
               className={`relative mt-5 font-display text-3xl font-semibold leading-tight text-cream transition-opacity
                           ${spinning ? 'opacity-60' : 'opacity-100'}`}
             >
-              {item.title}
+              {pass ? 'Okay, go ahead.' : item.title}
             </h2>
-            <p className="relative mt-1.5 text-cream/60">{item.detail}</p>
+            <p className="relative mt-1.5 text-cream/60">
+              {pass
+                ? `Reopen ${appLabel(pass)}. The next ${PASS_MINUTES} minutes are yours.`
+                : item.detail}
+            </p>
+
+            {pass ? (
+              <button
+                ref={primaryRef}
+                type="button"
+                onClick={onClose}
+                className="relative mt-7 w-full rounded-2xl bg-cream/10 px-5 py-4 font-semibold text-cream ring-1 ring-chrome/20 transition active:scale-95 hover:bg-cream/15"
+              >
+                Close
+              </button>
+            ) : (
+            <>
 
             <div className="relative mt-4 inline-flex items-center gap-2 rounded-full bg-walnut-950/60 px-3 py-1 text-xs text-cream/70 ring-1 ring-chrome/15">
               <cat.icon className="h-3.5 w-3.5" />
@@ -230,7 +264,7 @@ function FocusSheet({ item, spinning, isDone, onClose, onSpin, onDone, canSpin }
                 ref={primaryRef}
                 type="button"
                 disabled={spinning}
-                onClick={onClose}
+                onClick={onLetsGo}
                 className="flex items-center justify-center gap-2 rounded-2xl bg-amber-glow px-5 py-4 font-semibold text-walnut-950
                            shadow-[0_8px_24px_-8px_rgba(242,166,90,.8)] transition active:scale-95 hover:bg-[#f6b673] disabled:opacity-50"
               >
@@ -259,6 +293,18 @@ function FocusSheet({ item, spinning, isDone, onClose, onSpin, onDone, canSpin }
                 <RotateCcw className={`h-5 w-5 ${spinning ? 'animate-orbit' : ''}`} />
               </button>
             </div>
+
+            {intercept && (
+              <div className="relative mt-4">
+                <HoldButton
+                  label={`Hold to open ${appLabel(intercept)} anyway`}
+                  disabled={spinning}
+                  onComplete={onScroll}
+                />
+              </div>
+            )}
+            </>
+            )}
           </div>
         </div>
       </div>
@@ -344,6 +390,10 @@ export default function App() {
   const [roll, setRoll] = useState(0)
   const [current, setCurrent] = useState(null)
   const [spinning, setSpinning] = useState(false)
+  const [interceptApp, setInterceptApp] = useState(null)
+  const [pass, setPass] = useState(null)
+  const [log, setLog] = useState(loadLog)
+  const [setupOpen, setSetupOpen] = useState(false)
   const timers = useRef([])
   const currentRef = useRef(null)
   currentRef.current = current
@@ -369,37 +419,38 @@ export default function App() {
       ...s,
       done: s.done.includes(id) ? s.done.filter((d) => d !== id) : [...s.done, id],
     }))
-    navigator.vibrate?.(10)
+    buzz(10)
   }, [])
 
-  // pick one of the displayed, unfinished items, slot-machine style
-  const decide = useCallback(() => {
+  // pick one of the given ids (default: displayed, unfinished items), slot-machine style
+  const decide = useCallback((override) => {
     clearTimers()
-    if (openIds.length === 0) return
+    const ids = Array.isArray(override) ? override : openIds
+    if (ids.length === 0) return
     const prev = currentRef.current?.id
-    const pool = openIds.length > 1 ? openIds.filter((id) => id !== prev) : openIds
+    const pool = ids.length > 1 ? ids.filter((id) => id !== prev) : ids
     const final = ITEM_BY_ID[pick(pool)]
 
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || openIds.length === 1) {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || ids.length === 1) {
       setSpinning(false)
       setCurrent(final)
       return
     }
 
     setSpinning(true)
-    setCurrent(ITEM_BY_ID[pick(openIds)])
+    setCurrent(ITEM_BY_ID[pick(ids)])
     let t = 0
     let delay = 60
     while (t + delay < SPIN_MS) {
       t += delay
       delay *= 1.18
-      timers.current.push(setTimeout(() => setCurrent(ITEM_BY_ID[pick(openIds)]), t))
+      timers.current.push(setTimeout(() => setCurrent(ITEM_BY_ID[pick(ids)]), t))
     }
     timers.current.push(
       setTimeout(() => {
         setCurrent(final)
         setSpinning(false)
-        navigator.vibrate?.(18)
+        buzz(18)
       }, SPIN_MS),
     )
   }, [openIds.join()])
@@ -408,16 +459,47 @@ export default function App() {
     clearTimers()
     setSpinning(false)
     setCurrent(null)
+    setPass(null)
   }, [])
 
   useEffect(() => clearTimers, [])
 
+  /* ── doomscroll interceptor ── */
+
+  const endIntercept = (outcome) => {
+    if (!interceptApp) return
+    setLog(appendLog({ t: Date.now(), app: interceptApp, outcome }))
+    setInterceptApp(null)
+  }
+
+  const decideRef = useRef(decide)
+  decideRef.current = decide
+  const stateRef = useRef(state)
+  stateRef.current = state
+
+  useEffect(() => {
+    const handle = () => {
+      const app = parseIntercept(location.hash)
+      if (!app) return
+      clearHash()
+      setSetupOpen(false)
+      setPass(null)
+      setInterceptApp(app)
+      decideRef.current(interceptPool(stateRef.current))
+    }
+    handle()
+    window.addEventListener('hashchange', handle)
+    return () => window.removeEventListener('hashchange', handle)
+  }, [])
+
+  const stats = todayStats(log)
+
   return (
     <div className="mx-auto min-h-[100dvh] max-w-5xl px-4 pb-16 sm:px-6">
-      <Header onShuffle={shuffleMenu} doneCount={done.length} />
+      <Header onShuffle={shuffleMenu} doneCount={done.length} dodged={stats.dodged} />
 
       <div className="mx-auto max-w-md animate-rise">
-        <DecideButton onClick={decide} busy={spinning} disabled={openIds.length === 0} />
+        <DecideButton onClick={() => decide()} busy={spinning} disabled={openIds.length === 0} />
       </div>
 
       <div className="my-9 flex items-center gap-4 text-xs uppercase tracking-[0.3em] text-cream/30" aria-hidden="true">
@@ -439,22 +521,51 @@ export default function App() {
         ))}
       </main>
 
-      <p className="mt-8 text-center text-xs text-cream/30">Tap an activity when you’ve done it.</p>
+      <footer className="mt-8 flex flex-col items-center gap-3 text-xs text-cream/30">
+        <p>Tap an activity when you’ve done it.</p>
+        <button
+          type="button"
+          onClick={() => setSetupOpen(true)}
+          className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-cream/45 ring-1 ring-chrome/10 transition hover:bg-cream/5 hover:text-cream/70"
+        >
+          <Smartphone className="h-3.5 w-3.5" />
+          Doomscroll interceptor
+        </button>
+      </footer>
 
       {current && (
         <FocusSheet
           item={current}
           spinning={spinning}
           isDone={done.includes(current.id)}
-          canSpin={openIds.length > 1}
-          onClose={close}
-          onSpin={decide}
+          canSpin={interceptApp ? true : openIds.length > 1}
+          intercept={interceptApp}
+          pass={pass}
+          onClose={() => {
+            endIntercept('dismiss')
+            close()
+          }}
+          onLetsGo={() => {
+            endIntercept('pick')
+            close()
+          }}
+          onScroll={() => {
+            const app = interceptApp
+            endIntercept('scroll')
+            setPass(app)
+          }}
+          onSpin={() => (interceptApp ? decide(interceptPool(state)) : decide())}
           onDone={() => {
-            toggleDone(current.id)
-            if (!done.includes(current.id)) close()
+            if (!done.includes(current.id)) {
+              endIntercept('pick')
+              toggleDone(current.id)
+              close()
+            } else toggleDone(current.id)
           }}
         />
       )}
+
+      {setupOpen && <SetupSheet stats={stats} onClose={() => setSetupOpen(false)} />}
     </div>
   )
 }
