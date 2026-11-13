@@ -1,37 +1,110 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Shuffle, RotateCcw, X, Play, Clock } from 'lucide-react'
-import { MENU, ALL_ITEMS } from './menu.js'
+import { Shuffle, RotateCcw, X, Play, Clock, Check, Dices } from 'lucide-react'
+import { MENU, ITEM_BY_ID } from './menu.js'
 
 const SPIN_MS = 1100
+const STORAGE_KEY = 'dopamine-menu-v2'
 
-function pickRandom(exclude) {
-  const pool = ALL_ITEMS.filter((i) => i.title !== exclude?.title)
-  return pool[Math.floor(Math.random() * pool.length)]
+/* ───────────────────────── helpers ───────────────────────── */
+
+const today = () => new Date().toLocaleDateString('sv') // YYYY-MM-DD
+
+const shuffle = (arr) => {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)]
+
+/**
+ * Roll 3–4 items per category.
+ * Fresh items (not shown last time, not done today) come first, so a re-roll
+ * always feels new. Already-seen items only fill in when the pool runs dry.
+ */
+function rollMenu(prev = {}, done = []) {
+  const out = {}
+  for (const cat of MENU) {
+    const count = Math.min(cat.items.length, 3 + Math.round(Math.random()))
+    const stale = new Set([...(prev[cat.id] ?? []), ...done])
+    const fresh = shuffle(cat.items.filter((i) => !stale.has(i.id)))
+    const seen = shuffle(cat.items.filter((i) => stale.has(i.id) && !done.includes(i.id)))
+    const doneItems = shuffle(cat.items.filter((i) => done.includes(i.id)))
+    out[cat.id] = [...fresh, ...seen, ...doneItems].slice(0, count).map((i) => i.id)
+  }
+  return out
+}
+
+function loadState() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORAGE_KEY))
+    if (s && s.date === today() && s.selection && Array.isArray(s.done)) {
+      const valid = MENU.every((c) => s.selection[c.id]?.every((id) => ITEM_BY_ID[id]))
+      if (valid) return s
+    }
+  } catch {
+    /* storage unavailable: start fresh */
+  }
+  return { date: today(), selection: rollMenu(), done: [] }
+}
+
+function saveState(s) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(s))
+  } catch {
+    /* ignore */
+  }
 }
 
 /* ───────────────────────── Header ───────────────────────── */
 
-function Header() {
+function Header({ onShuffle, doneCount }) {
+  const [turn, setTurn] = useState(0)
   return (
-    <header className="pt-10 pb-6 text-center">
+    <header className="flex items-center gap-4 pt-8 pb-6">
       {/* space-age orbit ornament */}
-      <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center" aria-hidden="true">
-        <span className="relative block h-10 w-10 rounded-full chrome-ring">
-          <span className="absolute inset-[30%] rounded-full bg-amber-glow shadow-[0_0_18px_4px_rgba(242,166,90,.55)] animate-glow" />
-          <span className="absolute inset-0 rotate-[-25deg] scale-x-[1.7] scale-y-[.45] rounded-full border border-chrome/50" />
-        </span>
+      <span className="relative hidden h-10 w-10 shrink-0 rounded-full chrome-ring sm:block" aria-hidden="true">
+        <span className="absolute inset-[30%] rounded-full bg-amber-glow shadow-[0_0_18px_4px_rgba(242,166,90,.55)] animate-glow" />
+        <span className="absolute inset-0 rotate-[-25deg] scale-x-[1.7] scale-y-[.45] rounded-full border border-chrome/50" />
+      </span>
+
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] uppercase tracking-[0.3em] text-teal-mist/70">Daily</p>
+        <h1 className="font-display text-[2rem] font-semibold leading-none tracking-tight text-cream sm:text-5xl">
+          Dopamine <span className="italic font-normal text-amber-glow">Menu</span>
+        </h1>
+        <p className="mt-2 h-4 text-xs text-cream/45" aria-live="polite">
+          {doneCount > 0 ? `${doneCount} done today` : 'Pick one. That’s it.'}
+        </p>
       </div>
-      <h1 className="font-display text-4xl font-semibold tracking-tight text-cream sm:text-5xl">
-        Dopamine <span className="italic font-normal text-amber-glow">Menu</span>
-      </h1>
-      <p className="mt-2 text-sm tracking-[0.2em] uppercase text-teal-mist/70">Pick one. That’s it.</p>
+
+      <div className="chrome shrink-0 rounded-full p-[2px] shadow-[0_8px_20px_-8px_rgba(0,0,0,.8)]">
+        <button
+          type="button"
+          onClick={() => {
+            setTurn((t) => t + 1)
+            onShuffle()
+          }}
+          className="flex items-center gap-2 rounded-full bg-walnut-900 px-4 py-3 text-sm font-medium text-cream
+                     transition hover:bg-walnut-800 active:scale-95"
+        >
+          <Shuffle
+            className="h-4 w-4 text-amber-glow transition-transform duration-500"
+            style={{ transform: `rotate(${turn * 180}deg)` }}
+          />
+          Shuffle <span className="hidden sm:inline">Menu</span>
+        </button>
+      </div>
     </header>
   )
 }
 
-/* ─────────────────────── Randomizer ─────────────────────── */
+/* ─────────────────────── Decide button ─────────────────────── */
 
-function DecideButton({ onClick, busy }) {
+function DecideButton({ onClick, busy, disabled }) {
   const [ripples, setRipples] = useState([])
 
   const handle = (e) => {
@@ -49,10 +122,10 @@ function DecideButton({ onClick, busy }) {
       <button
         type="button"
         onClick={handle}
-        disabled={busy}
+        disabled={busy || disabled}
         className="corduroy group relative flex w-full items-center justify-center gap-3 overflow-hidden rounded-[calc(2rem-3px)]
-                   px-6 py-6 text-walnut-950 transition-transform duration-150 ease-out
-                   active:scale-[0.96] hover:brightness-110 disabled:cursor-wait sm:py-7"
+                   px-6 py-6 text-walnut-950 transition duration-150 ease-out
+                   active:scale-[0.96] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 sm:py-7"
       >
         {ripples.map((r) => (
           <span
@@ -62,10 +135,10 @@ function DecideButton({ onClick, busy }) {
           />
         ))}
         <span className="flex h-11 w-11 items-center justify-center rounded-full bg-walnut-950/85 text-amber-glow shadow-inner transition-transform duration-500 group-hover:rotate-180">
-          <Shuffle className={busy ? 'h-5 w-5 animate-orbit' : 'h-5 w-5'} strokeWidth={2.25} />
+          <Dices className={busy ? 'h-5 w-5 animate-orbit' : 'h-5 w-5'} strokeWidth={2.25} />
         </span>
         <span className="font-display text-2xl font-semibold tracking-tight drop-shadow-[0_1px_0_rgba(255,255,255,.25)] sm:text-3xl">
-          I can’t decide
+          {disabled ? 'All done. Shuffle for more' : 'Decide for me'}
         </span>
       </button>
     </div>
@@ -74,7 +147,7 @@ function DecideButton({ onClick, busy }) {
 
 /* ─────────────────────── Focus sheet ─────────────────────── */
 
-function FocusSheet({ item, spinning, fromRandom, onClose, onSpin }) {
+function FocusSheet({ item, spinning, isDone, onClose, onSpin, onDone, canSpin }) {
   const primaryRef = useRef(null)
 
   useEffect(() => {
@@ -111,7 +184,6 @@ function FocusSheet({ item, spinning, fromRandom, onClose, onSpin }) {
       <div className="relative w-full max-w-md animate-rise px-3 pb-[max(env(safe-area-inset-bottom),12px)] sm:px-0 sm:pb-0">
         <div className="chrome rounded-[2rem] p-[2px] shadow-[0_30px_80px_-20px_rgba(0,0,0,.9),0_0_80px_-20px_rgba(242,166,90,.45)]">
           <div className="walnut-panel relative overflow-hidden rounded-[calc(2rem-2px)] px-6 pt-6 pb-6 text-center">
-            {/* warm lamp glow */}
             <div className="pointer-events-none absolute -top-24 left-1/2 h-48 w-72 -translate-x-1/2 rounded-full bg-amber-glow/25 blur-3xl" />
 
             <button
@@ -124,11 +196,11 @@ function FocusSheet({ item, spinning, fromRandom, onClose, onSpin }) {
             </button>
 
             <p className="relative text-xs font-medium uppercase tracking-[0.25em] text-teal-mist/80">
-              {spinning ? 'Shuffling…' : fromRandom ? 'Tonight’s pick' : 'You chose'}
+              {spinning ? 'Shuffling…' : 'Your pick'}
             </p>
 
             <div
-              key={spinning ? item.title : 'final'}
+              key={spinning ? item.id : 'final'}
               className={`relative mx-auto mt-5 flex h-24 w-24 items-center justify-center rounded-3xl ring-1 ${cat.accent}
                           ${spinning ? 'scale-95 opacity-80' : 'animate-rise'}`}
             >
@@ -153,7 +225,7 @@ function FocusSheet({ item, spinning, fromRandom, onClose, onSpin }) {
               {cat.time}
             </div>
 
-            <div className="relative mt-7 grid grid-cols-[1fr_auto] gap-3">
+            <div className="relative mt-7 grid grid-cols-[1fr_auto_auto] gap-3">
               <button
                 ref={primaryRef}
                 type="button"
@@ -168,13 +240,23 @@ function FocusSheet({ item, spinning, fromRandom, onClose, onSpin }) {
               <button
                 type="button"
                 disabled={spinning}
+                onClick={onDone}
+                aria-label={isDone ? 'Mark as not done' : 'Mark as done'}
+                aria-pressed={isDone}
+                className={`flex items-center justify-center rounded-2xl px-4 py-4 ring-1 transition active:scale-95 disabled:opacity-50
+                  ${isDone ? 'bg-teal-cord text-walnut-950 ring-teal-mist/40' : 'bg-cream/5 text-cream/80 ring-chrome/20 hover:bg-cream/10'}`}
+              >
+                <Check className="h-5 w-5" strokeWidth={2.5} />
+              </button>
+              <button
+                type="button"
+                disabled={spinning || !canSpin}
                 onClick={onSpin}
-                aria-label={fromRandom ? 'Spin again' : 'Surprise me instead'}
-                className="flex items-center justify-center gap-2 rounded-2xl bg-cream/5 px-4 py-4 text-cream/80 ring-1 ring-chrome/20
-                           transition active:scale-95 hover:bg-cream/10 disabled:opacity-50"
+                aria-label="Pick again"
+                className="flex items-center justify-center rounded-2xl bg-cream/5 px-4 py-4 text-cream/80 ring-1 ring-chrome/20
+                           transition active:scale-95 hover:bg-cream/10 disabled:opacity-40"
               >
                 <RotateCcw className={`h-5 w-5 ${spinning ? 'animate-orbit' : ''}`} />
-                <span className="hidden text-sm sm:inline">{fromRandom ? 'Again' : 'Surprise me'}</span>
               </button>
             </div>
           </div>
@@ -186,24 +268,30 @@ function FocusSheet({ item, spinning, fromRandom, onClose, onSpin }) {
 
 /* ───────────────────────── Menu ───────────────────────── */
 
-function MenuItem({ item, accent, onSelect }) {
-  const Icon = item.icon
+function MenuItem({ item, accent, done, onToggle, delay }) {
+  const Icon = done ? Check : item.icon
   return (
-    <li>
+    <li className="animate-rise" style={{ animationDelay: `${delay}ms` }}>
       <button
         type="button"
-        onClick={() => onSelect(item)}
-        className="group flex w-full items-center gap-4 rounded-2xl px-3 py-3 text-left transition duration-200
-                   hover:bg-cream/[0.06] hover:translate-x-0.5 active:scale-[0.98]"
+        onClick={() => onToggle(item.id)}
+        aria-pressed={done}
+        className={`group flex w-full items-center gap-4 rounded-2xl px-3 py-3 text-left transition duration-300
+                    hover:bg-cream/[0.06] active:scale-[0.98] ${done ? 'opacity-45' : ''}`}
       >
         <span
-          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 transition duration-200
-                      group-hover:scale-110 group-hover:shadow-[0_0_20px_-4px_currentColor] ${accent}`}
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 transition duration-300
+                      ${done ? 'bg-teal-cord/25 text-teal-mist ring-teal-cord/40' : `${accent} group-hover:scale-110 group-hover:shadow-[0_0_20px_-4px_currentColor]`}`}
         >
-          <Icon className="h-5 w-5" strokeWidth={1.9} />
+          <Icon className="h-5 w-5" strokeWidth={done ? 2.5 : 1.9} />
         </span>
-        <span className="min-w-0">
-          <span className="block font-medium text-cream">{item.title}</span>
+        <span className="min-w-0 flex-1">
+          <span
+            className={`block font-medium text-cream decoration-teal-mist/70 decoration-2 transition-all duration-300
+                        ${done ? 'line-through' : ''}`}
+          >
+            {item.title}
+          </span>
           <span className="block truncate text-sm text-cream/50">{item.detail}</span>
         </span>
       </button>
@@ -211,14 +299,13 @@ function MenuItem({ item, accent, onSelect }) {
   )
 }
 
-function CategoryCard({ cat, onSelect, index }) {
+function CategoryCard({ cat, ids, done, onToggle, roll }) {
   const CatIcon = cat.icon
   return (
     <section
-      className="walnut-panel animate-rise rounded-[1.75rem] p-2 shadow-[0_20px_40px_-20px_rgba(0,0,0,.8)]
-                 ring-1 ring-chrome/10 transition duration-300 hover:-translate-y-1 hover:ring-amber-glow/25
+      className="walnut-panel min-w-0 rounded-[1.75rem] p-2 shadow-[0_20px_40px_-20px_rgba(0,0,0,.8)]
+                 ring-1 ring-chrome/10 transition duration-300 hover:ring-amber-glow/25
                  hover:shadow-[0_28px_50px_-20px_rgba(0,0,0,.9),0_0_40px_-15px_rgba(242,166,90,.35)]"
-      style={{ animationDelay: `${120 + index * 80}ms` }}
       aria-labelledby={`cat-${cat.id}`}
     >
       <div className="flex items-center gap-3 px-3 pt-3 pb-3">
@@ -233,11 +320,17 @@ function CategoryCard({ cat, onSelect, index }) {
           <span className="block text-cream/40">{cat.time}</span>
         </span>
       </div>
-      {/* chrome hairline */}
       <div className="chrome mx-3 h-px opacity-40" />
       <ul className="py-1">
-        {cat.items.map((item) => (
-          <MenuItem key={item.title} item={item} accent={cat.accent} onSelect={onSelect} />
+        {ids.map((id, i) => (
+          <MenuItem
+            key={`${roll}-${id}`}
+            item={ITEM_BY_ID[id]}
+            accent={cat.accent}
+            done={done.includes(id)}
+            onToggle={onToggle}
+            delay={i * 50}
+          />
         ))}
       </ul>
     </section>
@@ -247,46 +340,60 @@ function CategoryCard({ cat, onSelect, index }) {
 /* ───────────────────────── App ───────────────────────── */
 
 export default function App() {
+  const [state, setState] = useState(loadState)
+  const [roll, setRoll] = useState(0)
   const [current, setCurrent] = useState(null)
   const [spinning, setSpinning] = useState(false)
-  const [fromRandom, setFromRandom] = useState(false)
   const timers = useRef([])
+  const currentRef = useRef(null)
+  currentRef.current = current
+
+  useEffect(() => saveState(state), [state])
+
+  const { selection, done } = state
+  const visibleIds = MENU.flatMap((c) => selection[c.id])
+  const openIds = visibleIds.filter((id) => !done.includes(id))
 
   const clearTimers = () => {
     timers.current.forEach(clearTimeout)
     timers.current = []
   }
 
-  const currentRef = useRef(null)
-  currentRef.current = current
+  const shuffleMenu = () => {
+    setState((s) => ({ ...s, selection: rollMenu(s.selection, s.done) }))
+    setRoll((r) => r + 1)
+  }
 
-  const spin = useCallback(() => {
+  const toggleDone = useCallback((id) => {
+    setState((s) => ({
+      ...s,
+      done: s.done.includes(id) ? s.done.filter((d) => d !== id) : [...s.done, id],
+    }))
+    navigator.vibrate?.(10)
+  }, [])
+
+  // pick one of the displayed, unfinished items, slot-machine style
+  const decide = useCallback(() => {
     clearTimers()
-    setFromRandom(true)
-    const prev = currentRef.current
-    const final = pickRandom(prev)
+    if (openIds.length === 0) return
+    const prev = currentRef.current?.id
+    const pool = openIds.length > 1 ? openIds.filter((id) => id !== prev) : openIds
+    const final = ITEM_BY_ID[pick(pool)]
 
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || openIds.length === 1) {
       setSpinning(false)
       setCurrent(final)
       return
     }
 
     setSpinning(true)
-    setCurrent(prev ?? pickRandom(final))
-    // slot-machine style: ticks slow down, then land on the final pick
+    setCurrent(ITEM_BY_ID[pick(openIds)])
     let t = 0
     let delay = 60
-    let last = prev
     while (t + delay < SPIN_MS) {
       t += delay
       delay *= 1.18
-      timers.current.push(
-        setTimeout(() => {
-          last = pickRandom(last)
-          setCurrent(last)
-        }, t),
-      )
+      timers.current.push(setTimeout(() => setCurrent(ITEM_BY_ID[pick(openIds)]), t))
     }
     timers.current.push(
       setTimeout(() => {
@@ -295,14 +402,7 @@ export default function App() {
         navigator.vibrate?.(18)
       }, SPIN_MS),
     )
-  }, [])
-
-  const select = (item) => {
-    clearTimers()
-    setFromRandom(false)
-    setSpinning(false)
-    setCurrent(item)
-  }
+  }, [openIds.join()])
 
   const close = useCallback(() => {
     clearTimers()
@@ -314,26 +414,46 @@ export default function App() {
 
   return (
     <div className="mx-auto min-h-[100dvh] max-w-5xl px-4 pb-16 sm:px-6">
-      <Header />
+      <Header onShuffle={shuffleMenu} doneCount={done.length} />
 
       <div className="mx-auto max-w-md animate-rise">
-        <DecideButton onClick={spin} busy={spinning} />
+        <DecideButton onClick={decide} busy={spinning} disabled={openIds.length === 0} />
       </div>
 
-      <div className="my-10 flex items-center gap-4 text-xs uppercase tracking-[0.3em] text-cream/30" aria-hidden="true">
+      <div className="my-9 flex items-center gap-4 text-xs uppercase tracking-[0.3em] text-cream/30" aria-hidden="true">
         <span className="h-px flex-1 bg-gradient-to-r from-transparent to-chrome/25" />
         or choose
         <span className="h-px flex-1 bg-gradient-to-l from-transparent to-chrome/25" />
       </div>
 
-      <main className="grid gap-5 md:grid-cols-2">
-        {MENU.map((cat, i) => (
-          <CategoryCard key={cat.id} cat={cat} index={i} onSelect={(item) => select({ ...item, category: cat })} />
+      <main className="grid items-start gap-5 md:grid-cols-2">
+        {MENU.map((cat) => (
+          <CategoryCard
+            key={cat.id}
+            cat={cat}
+            ids={selection[cat.id]}
+            done={done}
+            onToggle={toggleDone}
+            roll={roll}
+          />
         ))}
       </main>
 
+      <p className="mt-8 text-center text-xs text-cream/30">Tap an activity when you’ve done it.</p>
+
       {current && (
-        <FocusSheet item={current} spinning={spinning} fromRandom={fromRandom} onClose={close} onSpin={spin} />
+        <FocusSheet
+          item={current}
+          spinning={spinning}
+          isDone={done.includes(current.id)}
+          canSpin={openIds.length > 1}
+          onClose={close}
+          onSpin={decide}
+          onDone={() => {
+            toggleDone(current.id)
+            if (!done.includes(current.id)) close()
+          }}
+        />
       )}
     </div>
   )
