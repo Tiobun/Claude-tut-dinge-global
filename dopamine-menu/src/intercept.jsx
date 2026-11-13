@@ -293,11 +293,40 @@ export function SetupSheet({ onClose, stats }) {
               </Step>
             </ol>
 
-            <h3 className="mt-7 text-[11px] uppercase tracking-[0.25em] text-teal-mist/80">Android</h3>
-            <p className="mt-2 text-sm text-cream/60">
-              In MacroDroid: trigger <Act>Application Launched</Act> → action <Act>Open Website / HTTP GET</Act> with the
-              link above. Add a <Act>{PASS_MINUTES}-minute</Act> cooldown in the macro’s constraints.
-            </p>
+            <h3 className="mt-7 text-[11px] uppercase tracking-[0.25em] text-teal-mist/80">Android (MacroDroid)</h3>
+            <ol className="mt-4 space-y-4 text-sm leading-relaxed text-cream/75">
+              <Step n="1">
+                <p>
+                  <Act>Variables</Act> → add a global <Act>Boolean</Act> named <Act>scroll_pass</Act>, value{' '}
+                  <Act>false</Act>.
+                </p>
+              </Step>
+              <Step n="2">
+                <p>
+                  New macro. Trigger: <Act>Applications</Act> → <Act>App Launched/Closed</Act> → <Act>Launched</Act>, then
+                  pick your feed apps.
+                </p>
+              </Step>
+              <Step n="3">
+                <p>Actions, in this order:</p>
+                <p className="text-cream/60">
+                  <Act>Set Variable</Act> scroll_pass = true → <Act>Open Website</Act> with the link below →{' '}
+                  <Act>Wait Before Next Action</Act> {PASS_MINUTES} min → <Act>Set Variable</Act> scroll_pass = false.
+                </p>
+              </Step>
+              <Step n="4">
+                <p>
+                  Constraint: <Act>MacroDroid Variable</Act> scroll_pass <Act>is false</Act>. That’s the{' '}
+                  {PASS_MINUTES}-minute pass.
+                </p>
+                <CopyRow text={`${PUBLIC_URL}#intercept-feed`} />
+              </Step>
+              <Step n="5">
+                <p>
+                  Allow the permissions MacroDroid asks for, and turn off battery optimization for it so it keeps running.
+                </p>
+              </Step>
+            </ol>
 
             <p className="mt-6 rounded-xl bg-walnut-950/60 p-3 text-xs text-cream/50 ring-1 ring-chrome/10">
               The menu opens in Safari or the Claude app. Make sure you’re signed in to Claude there, then tap one of the
